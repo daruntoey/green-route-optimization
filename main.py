@@ -1,8 +1,9 @@
 import os 
 import json 
-import requests from fastapi 
-import FastAPI, HTTPException from google 
-import genai from google.genai 
+import requests 
+from fastapi import FastAPI, HTTPException 
+from google import genai 
+from google.genai 
 import types 
 
 app = FastAPI()
