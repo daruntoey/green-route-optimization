@@ -7,6 +7,14 @@ from google.genai import types
 
 app = FastAPI()
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/ask-zone/{zone_name}")
+def ask_zone(zone_name: str):
+    return {"zone": zone_name}
+
 # URL ของไฟล์ CSV บน GitHub (ต้องเป็นลิ้งค์แบบ 'raw')
 GITHUB_CSV_URL = "https://raw.githubusercontent.com/daruntoey/green-route-optimization/main/Kerry_RouteSum_with_Parcels.csv"
 
