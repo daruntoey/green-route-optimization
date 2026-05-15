@@ -70,7 +70,7 @@ async def query_zone(zone_name: str):
 
         # 4. Generate response
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=prompt_text,
             config=config
         )
