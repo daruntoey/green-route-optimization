@@ -1,68 +1,56 @@
 import os
+import requests
+import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
-app = FastAPI(title="KEX Route Optimization API")
+app = FastAPI()
 
-# ตั้งค่า Client สำหรับ Vertex AI / Gemini
-def get_ai_client():
-    api_key = os.environ.get("GOOGLE_CLOUD_API_KEY")
-    if not api_key:
-        raise ValueError("Environment variable GOOGLE_CLOUD_API_KEY is not set")
-    return genai.Client(vertexai=True, api_key=api_key)
+# URL ของไฟล์ CSV บน GitHub (ต้องเป็นลิ้งค์แบบ 'raw')
+GITHUB_CSV_URL = "https://raw.githubusercontent.com/daruntoey/green-route-optimization/main/Kerry_RouteSum_with_Parcels.csv"
 
-# โครงสร้างสำหรับการรับข้อมูลผ่าน API (หากต้องการส่ง CSV ใหม่ผ่าน API)
-class RouteRequest(BaseModel):
-    csv_data: str
-
-# ย้าย System Instruction มาไว้เป็นตัวแปรกลาง
-SYSTEM_PROMPT = """Role: You are a Logistics Route Optimization Specialist.
-Task: Analyze the provided CSV data to calculate optimal fleet size and route sequence for KEX Express.
-Definitions:
-'1 - SHOP': High priority, must be completed before 12:00 PM.
-'2 - PSP': Medium priority.
-'3 - RTSP': Standard priority.
-Load Balancing: Max capacity 200 parcels (Target 90%).
-Output Format: Strictly JSON."""
-
-@app.get("/")
-def home():
-    return {"status": "online", "message": "KEX Optimization API is ready"}
-
-@app.post("/optimize")
-async def optimize_route(request: RouteRequest):
+def get_latest_csv():
     try:
-        client = get_ai_client()
-        
-        # กำหนดเนื้อหาที่จะส่งให้ AI
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=f"Here is the CSV data:\n{request.csv_data}")]
-            )
-        ]
+        response = requests.get(GITHUB_CSV_URL)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        return f"Error loading CSV: {str(e)}"
 
-        # ตั้งค่าการเรียกใช้ Model
+@app.get("/ask-zone/{zone_name}")
+async def query_zone(zone_name: str):
+    try:
+        # 1. ดึงข้อมูล CSV ล่าสุดจาก GitHub
+        csv_content = get_latest_csv()
+        
+        # 2. ตั้งค่า AI Client
+        client = genai.Client(vertexai=True, api_key=os.environ.get("GOOGLE_CLOUD_API_KEY"))
+        
+        # 3. สร้าง Prompt ที่เน้นผลลัพธ์เป็น JSON
+        prompt_text = f"""
+        Analyze the following CSV data for the zone: {zone_name}.
+        Data: {csv_content}
+        
+        Please provide the route optimization for this specific zone in JSON format only.
+        Include total vehicles needed, stop sequences, and estimated completion time (within 08:00-19:00).
+        """
+
         generate_config = types.GenerateContentConfig(
-            temperature=0.2, # ปรับลดลงเพื่อให้คำตอบนิ่งและแม่นยำขึ้น
-            max_output_tokens=65535,
-            system_instruction=[types.Part.from_text(text=SYSTEM_PROMPT)],
-            response_mime_type="application/json" # บังคับให้ AI ตอบเป็น JSON
+            temperature=0.1, # ต่ำเพื่อให้โครงสร้าง JSON นิ่ง
+            system_instruction="You are a Logistics JSON Expert. Always return raw JSON code without Markdown backticks.",
+            response_mime_type="application/json" # บังคับ Output เป็น JSON
         )
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash", # แนะนำให้ใช้ตัวล่าสุด
-            contents=contents,
+            model="gemini-2.0-flash",
+            contents=prompt_text,
             config=generate_config
         )
 
-        return response.text # ส่งคืนผลลัพธ์ JSON จาก AI
-        
+        # 4. คืนค่าเป็น JSON Object ไปยัง User
+        import json
+        return json.loads(response.text)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
