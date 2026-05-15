@@ -16,7 +16,7 @@ def root():
 GITHUB_CSV_URL = (
     "https://raw.githubusercontent.com/"
     "daruntoey/green-route-optimization/main/"
-    "Kerry_RouteSum_with_Parcels.csv"
+    "data/Kerry_RouteSum_with_Parcels.csv"
 )
 
 
