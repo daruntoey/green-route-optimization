@@ -1,6 +1,8 @@
 import os
 import json
 import requests
+import pandas as pd
+from io import StringIO
 from fastapi import FastAPI, HTTPException
 from google import genai
 from google.genai import types
@@ -12,6 +14,7 @@ app = FastAPI()
 def root():
     return {"status": "ok"}
 
+
 # ---------- GitHub CSV ----------
 GITHUB_CSV_URL = (
     "https://raw.githubusercontent.com/"
@@ -20,11 +23,17 @@ GITHUB_CSV_URL = (
 )
 
 
+# ---------- Load CSV ----------
 def get_latest_csv():
     try:
         response = requests.get(GITHUB_CSV_URL, timeout=30)
         response.raise_for_status()
+
+        # FIX THAI ENCODING
+        response.encoding = "cp874"
+
         return response.text
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -41,44 +50,83 @@ client = genai.Client(
 # ---------- API endpoint ----------
 @app.get("/ask-zone/{zone_name}")
 async def query_zone(zone_name: str):
+
     try:
-        # 1. Load latest CSV
+        # 1. โหลด CSV
         csv_content = get_latest_csv()
 
-        # 2. Build prompt
+        # 2. อ่าน CSV ด้วย pandas
+        df = pd.read_csv(
+            StringIO(csv_content),
+            encoding="cp874"
+        )
+
+        # 3. filter เฉพาะ zone
+        zone_df = df[
+            df["Zone"].astype(str).str.contains(
+                zone_name,
+                case=False,
+                na=False
+            )
+        ]
+
+        # ถ้าไม่เจอข้อมูล
+        if zone_df.empty:
+            return {
+                "zone": zone_name,
+                "message": "No data found"
+            }
+
+        # 4. ลดจำนวน rows เพื่อลด token
+        zone_df = zone_df.head(50)
+
+        # 5. convert กลับเป็น CSV
+        filtered_csv = zone_df.to_csv(index=False)
+
+        # 6. Prompt
         prompt_text = f"""
-        Analyze the following CSV data for zone: {zone_name}
+        Analyze logistics route data for zone: {zone_name}
 
-        Data:
-        {csv_content}
+        CSV Data:
+        {filtered_csv}
 
-        Return JSON only with:
-        - total_vehicles_needed
-        - stop_sequences
-        - estimated_completion_time
+        Return JSON only.
+
+        Required JSON structure:
+
+        {{
+          "zone": "...",
+          "total_vehicles_needed": number,
+          "stop_sequences": {{
+              "route_id": ["stop1", "stop2"]
+          }},
+          "estimated_completion_time": number
+        }}
         """
 
-        # 3. Gemini config
+        # 7. Config
         config = types.GenerateContentConfig(
             temperature=0.1,
             system_instruction=(
-                "You are a Logistics JSON Expert. "
-                "Return only raw JSON."
+                "You are a logistics optimization expert. "
+                "Always return clean JSON only. "
+                "Preserve Thai language correctly."
             ),
             response_mime_type="application/json"
         )
 
-        # 4. Generate response
+        # 8. Generate
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt_text,
             config=config
         )
 
-        # 5. Return JSON
+        # 9. Parse JSON
         return json.loads(response.text)
 
     except Exception as e:
+
         raise HTTPException(
             status_code=500,
             detail=str(e)
