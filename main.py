@@ -47,82 +47,144 @@ client = genai.Client(
 )
 
 
+# ---------- Debug endpoint ----------
+@app.get("/zones")
+def get_zones():
+
+    csv_content = get_latest_csv()
+
+    df = pd.read_csv(
+        StringIO(csv_content),
+        encoding="cp874"
+    )
+
+    zones = (
+        df["Zone"]
+        .astype(str)
+        .str.strip()
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    return {
+        "zones": zones[:100]
+    }
+
+
 # ---------- API endpoint ----------
 @app.get("/ask-zone/{zone_name}")
 async def query_zone(zone_name: str):
 
     try:
+
         # 1. โหลด CSV
         csv_content = get_latest_csv()
 
-        # 2. อ่าน CSV ด้วย pandas
+        # 2. อ่าน CSV
         df = pd.read_csv(
             StringIO(csv_content),
             encoding="cp874"
         )
 
-        # 3. filter เฉพาะ zone
+        # 3. clean columns
+        df.columns = df.columns.str.strip()
+
+        # 4. normalize zone column
+        df["Zone_clean"] = (
+            df["Zone"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        input_zone = zone_name.strip().lower()
+
+        # 5. filter zone
         zone_df = df[
-            df["Zone"].astype(str).str.contains(
-                zone_name,
-                case=False,
+            df["Zone_clean"].str.contains(
+                input_zone,
                 na=False
             )
         ]
 
-        # ถ้าไม่เจอข้อมูล
+        # 6. ถ้าไม่เจอ
         if zone_df.empty:
+
+            available_zones = (
+                df["Zone"]
+                .astype(str)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+
             return {
                 "zone": zone_name,
-                "message": "No data found"
+                "message": "No data found",
+                "available_zones": available_zones[:20]
             }
 
-        # 4. ลดจำนวน rows เพื่อลด token
+        # 7. ลด rows
         zone_df = zone_df.head(50)
 
-        # 5. convert กลับเป็น CSV
-        filtered_csv = zone_df.to_csv(index=False)
+        # 8. ใช้เฉพาะ columns สำคัญ
+        selected_df = zone_df[
+            [
+                "Zone",
+                "Truck ID",
+                "Stop Name",
+                "Parcels",
+                "Load %",
+                "Cumul Parcels"
+            ]
+        ]
 
-        # 6. Prompt
+        filtered_csv = selected_df.to_csv(index=False)
+
+        # 9. Prompt
         prompt_text = f"""
-        Analyze logistics route data for zone: {zone_name}
+        Analyze logistics route data.
+
+        Zone:
+        {zone_name}
 
         CSV Data:
         {filtered_csv}
 
         Return JSON only.
 
-        Required JSON structure:
+        Required format:
 
         {{
           "zone": "...",
           "total_vehicles_needed": number,
           "stop_sequences": {{
-              "route_id": ["stop1", "stop2"]
+              "truck_id": ["stop1", "stop2"]
           }},
           "estimated_completion_time": number
         }}
         """
 
-        # 7. Config
+        # 10. Config
         config = types.GenerateContentConfig(
             temperature=0.1,
             system_instruction=(
                 "You are a logistics optimization expert. "
-                "Always return clean JSON only. "
+                "Always return valid clean JSON only. "
                 "Preserve Thai language correctly."
             ),
             response_mime_type="application/json"
         )
 
-        # 8. Generate
+        # 11. Generate
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt_text,
             config=config
         )
 
-        # 9. Parse JSON
+        # 12. Return JSON
         return json.loads(response.text)
 
     except Exception as e:
